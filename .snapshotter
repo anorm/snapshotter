@@ -1,0 +1,24 @@
+[General]
+snapshot_base_path = /home/vagrant/snapshot_data
+
+[test1]
+live_path = /home/vagrant/test1
+command.1 = cp -al $NEWEST_SNAPSHOT
+
+keep.1.age    = 1h
+keep.1.number = 6
+
+keep.2.age    = 1d
+keep.2.number = 1
+
+keep.3.age    = 1w
+keep.3.number = 1
+
+keep.4.age    = 1m
+keep.4.number = 1
+
+keep.4.age    = 6m
+keep.4.number = 5
+
+keep.5.age    = 18m
+keep.5.number = 1
