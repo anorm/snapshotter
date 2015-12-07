@@ -2,8 +2,7 @@
 snapshot_base_path = /home/vagrant/snapshot_data
 
 [test1]
-live_path = /home/vagrant/test1
-command.1 = cp -al $NEWEST_SNAPSHOT
+command.1     = rsync -a --delete --link-dest="$YOUNGEST_SNAPSHOT" /home/vagrant/test1/ "$SNAPSHOT"/
 
 keep.1.age    = 1h
 keep.1.number = 6

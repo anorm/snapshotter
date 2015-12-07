@@ -1,14 +1,17 @@
 #!/usr/bin/env python
 """
-Basic script to create an empty python package containing one module
+Takes and maintains snapshots. Confiuration in ~/.snapshotter (or in specified config file)
 """
 from os.path import expanduser
+import argparse
 import ConfigParser
 import datetime
 import math
 import os
 import re
 import shutil
+import subprocess
+import sys
 import StringIO
 
 SNAPSHOT_FORMAT = '%Y-%m-%d %H:%M:%S'
@@ -20,7 +23,7 @@ ERROR=4
 
 def log(severity, message):
     if severity == DEBUG:
-        print("Debug:   " + message)
+        #print("Debug:   " + message)
         pass
     elif severity == INFO:
         print("Info:    " + message)
@@ -42,12 +45,6 @@ def mkdir_recursive(path):
         os.mkdir(path)
 
 def parse_timedelta(s):
-    years  = 0
-    months = 0
-    weeks  = 0
-    days   = 0
-    hours  = 0
-
     try:
         delta = {'y':0, 'm':0, 'w':0, 'd':0, 'h':0}
         for num,unit in re.findall(r'(\d+)(\D+)', s):
@@ -86,14 +83,46 @@ class TaskKeepRule:
 class Task:
     def __init__(self, name):
         self._name       = name
+        self._commands   = []
         self._keep_rules = []
+
+    def add_command(self, command):
+        self._commands.append(command)
 
     def add_keep_rule(self, age, number):
         self._keep_rules.append(TaskKeepRule(age, number))
         self._keep_rules.sort(key=lambda rule: rule.get_age())
 
+    def get_keep_rules(self):
+        return self._keep_rules
+
     def get_name(self):
         return self._name
+
+    def take_snapshot(self, task_snapshot_path, environment):
+        log(INFO, 'Taking snapshot of {}'.format(self._name))
+        env = os.environ.copy()
+        env.update(environment)
+        for command in self._commands:
+            try:
+                subprocess.check_output('{}'.format(command), env=env, shell=True, cwd=task_snapshot_path)
+            except subprocess.CalledProcessError as e:
+                log(ERROR, str(e))
+                return False
+        return True
+
+    def find_existing_snapshots(self, task_snapshot_base_path):
+        now = datetime.datetime.now()
+        snapshots = []
+        for snapshot_name in next(os.walk(task_snapshot_base_path))[1]:
+            timestamp = datetime.datetime.strptime(snapshot_name, SNAPSHOT_FORMAT)
+            age = now - timestamp
+            snapshots.append( {'name':      snapshot_name,
+                               'path':      os.path.join(task_snapshot_base_path, snapshot_name),
+                               'timestamp': timestamp,
+                               'age':       age} )
+        log(DEBUG, 'Found {} existing snapshots for {}'.format(len(snapshots), self.get_name()))
+        return snapshots
 
     def find_expired_snapshots(self, snapshots):
         snapshots.sort(key=lambda snapshot: snapshot['age'])
@@ -147,6 +176,9 @@ class Snapshotter:
     def add_task(self, task):
         self._tasks.append(task)
 
+    def get_tasks(self):
+        return self._tasks
+
     def set_snapshot_base_path(self, path):
         self._snapshot_base_path = path
 
@@ -154,27 +186,33 @@ class Snapshotter:
         mkdir_recursive(self._snapshot_base_path)
 
         for task in self._tasks:
-            log(DEBUG, 'Taking snapshot of task: {}'.format(task.get_name()))
+            log(INFO, 'Taking snapshot of task: {}'.format(task.get_name()))
             task_snapshot_base_path = os.path.join(self._snapshot_base_path, task.get_name())
+            mkdir_recursive(task_snapshot_base_path)
+
+            existing_snapshots = task.find_existing_snapshots(task_snapshot_base_path)
+            existing_snapshots.sort(key=lambda snapshot: snapshot['age'])
+
             timestamp = datetime.datetime.now().strftime(SNAPSHOT_FORMAT)
             task_snapshot_path = os.path.join(task_snapshot_base_path, timestamp)
             mkdir_recursive(task_snapshot_path)
             log(DEBUG, "Timestamp is {}".format(str(timestamp)))
 
+            environment = {}
+            environment['SNAPSHOT'] = task_snapshot_path
+            if existing_snapshots:
+                environment['YOUNGEST_SNAPSHOT'] = existing_snapshots[0]['path']
+            #else:
+            #    environment['YOUNGEST_SNAPSHOT'] = None
+            if not task.take_snapshot(task_snapshot_path, environment):
+                log(INFO, 'Cleaning up after erroneous snapshot: {}'.format(task_snapshot_path))
+                shutil.rmtree(task_snapshot_path)
+
     def perform_cleanup(self):
-        now = datetime.datetime.now()
         for task in self._tasks:
             log(DEBUG, 'Perfoming cleanup of {}'.format(task.get_name()))
             task_snapshot_base_path = os.path.join(self._snapshot_base_path, task.get_name())
-            snapshots = []
-            for snapshot_name in next(os.walk(task_snapshot_base_path))[1]:
-                timestamp = datetime.datetime.strptime(snapshot_name, SNAPSHOT_FORMAT)
-                age = now - timestamp
-                snapshots.append( {'name':      snapshot_name,
-                                   'path':      os.path.join(task_snapshot_base_path, snapshot_name),
-                                   'timestamp': timestamp,
-                                   'age':       age} )
-            log(DEBUG, 'Found {} existing snapshots for {}'.format(len(snapshots), task.get_name()))
+            snapshots = task.find_existing_snapshots(task_snapshot_base_path)
             expired = task.find_expired_snapshots(snapshots)
             for snapshot in expired:
                 log(INFO, 'Removing expired snapshot {}'.format(snapshot["name"]))
@@ -189,11 +227,18 @@ class Snapshotter:
             ret.write('\n')
         return ret.getvalue()
 
-def main():
+def main(arguments):
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('-c', '--config', help="Configuration file", default='~/.snapshotter')
+    parser.add_argument('--cron', help="Show suitable crontab job definition", action='store_true')
+
+    args = parser.parse_args(arguments)
+
     config = ConfigParser.ConfigParser()
 
-    log(DEBUG, 'Reading config file: {}'.format(expanduser("~/.snapshotter")))
-    config.read(expanduser("~/.snapshotter"))
+    log(DEBUG, 'Reading config file: {}'.format(expanduser(args.config)))
+    config.read(expanduser(args.config))
 
     snapshotter = Snapshotter()
     snapshotter.set_snapshot_base_path(config.get('General', 'snapshot_base_path'))
@@ -210,10 +255,35 @@ def main():
                                config.get(task_name, 'keep.{}.number'.format(keep)))
             keep = keep + 1
 
+        command = 1
+        while config.has_option(task_name, 'command.{}'.format(command)):
+            task.add_command(config.get(task_name, 'command.{}'.format(command)))
+            command = command + 1
+
         snapshotter.add_task(task)
+
+    if args.cron:
+        mininum_age = None
+        for task in snapshotter.get_tasks():
+            for rule in task.get_keep_rules():
+                age = rule.get_age() / rule.get_number()
+                if mininum_age:
+                    if age < mininum_age:
+                        mininum_age = age
+                else:
+                    mininum_age = age
+        minutes = mininum_age.total_seconds() / 60
+        command = '{} --config {}'.format(os.path.realpath(sys.argv[0]), expanduser(args.config))
+        if minutes < 60:
+            print('*/{} * * * * {}'.format(int(minutes), command))
+        elif minutes < 24*60:
+            print('0 */{} * * * {}'.format(int(minutes/60), command))
+        else:
+            print('0 0 * * * {}'.format(command))
+        return 0
 
     snapshotter.take_snapshot()
     snapshotter.perform_cleanup()
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main(sys.argv[1:]))
