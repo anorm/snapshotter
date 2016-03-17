@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Takes and maintains snapshots. Confiuration in ~/.snapshotter (or in specified config file)
+Takes and maintains snapshots. Configuration in ~/.snapshotter (or in specified config file)
 """
 from os.path import expanduser
 import argparse
@@ -21,10 +21,13 @@ INFO=2
 WARNING=3
 ERROR=4
 
+VERBOSITY = WARNING
+
 def log(severity, message):
+    if severity < VERBOSITY:
+        return
     if severity == DEBUG:
-        #print("Debug:   " + message)
-        pass
+        print("Debug:   " + message)
     elif severity == INFO:
         print("Info:    " + message)
     elif severity == WARNING:
@@ -232,8 +235,12 @@ def main(arguments):
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('-c', '--config', help="Configuration file", default='~/.snapshotter')
     parser.add_argument('--cron', help="Show suitable crontab job definition", action='store_true')
+    parser.add_argument('--verbose', dest='verbosity', choices=["DEBUG", "INFO", "WARNING", "ERROR"], default="WARNING")
 
     args = parser.parse_args(arguments)
+
+    global VERBOSITY
+    VERBOSITY = eval(args.verbosity)
 
     config = ConfigParser.ConfigParser()
 
@@ -273,7 +280,7 @@ def main(arguments):
                 else:
                     mininum_age = age
         minutes = mininum_age.total_seconds() / 60
-        command = '{} --config {}'.format(os.path.realpath(sys.argv[0]), expanduser(args.config))
+        command = '{} --config {}'.format(os.path.realpath(sys.argv[0]), os.path.realpath(expanduser(args.config)))
         if minutes < 60:
             print('*/{} * * * * {}'.format(int(minutes), command))
         elif minutes < 24*60:
