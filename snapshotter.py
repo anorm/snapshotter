@@ -6,10 +6,12 @@ from os.path import expanduser
 import argparse
 import ConfigParser
 import datetime
+import itertools
 import math
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import StringIO
@@ -219,6 +221,11 @@ class Snapshotter:
             expired = task.find_expired_snapshots(snapshots)
             for snapshot in expired:
                 log(INFO, 'Removing expired snapshot {}'.format(snapshot["name"]))
+                for root, dirs, files in os.walk(snapshot['path'], topdown=True):
+                    for name in itertools.chain(dirs, files):
+                        pathname = os.path.join(root, name)
+                        st = os.stat(pathname)
+                        os.chmod(pathname, st.st_mode | stat.S_IWRITE)
                 shutil.rmtree(snapshot['path'])
 
     def __str__(self):
