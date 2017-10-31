@@ -43,6 +43,8 @@ def indent(text, amount, ch=' '):
 
 def mkdir_recursive(path):
     log(DEBUG, 'Creating directory: {}'.format(path))
+    if SIMULATE:
+        return
     sub_path = os.path.dirname(path)
     if not os.path.exists(sub_path):
         mkdir_recursive(sub_path)
@@ -110,7 +112,9 @@ class Task:
         env.update(environment)
         for command in self._commands:
             try:
-                subprocess.check_output('{}'.format(command), env=env, shell=True, cwd=task_snapshot_path)
+                log(DEBUG, command)
+                if not SIMULATE:
+                    subprocess.check_output('{}'.format(command), env=env, shell=True, cwd=task_snapshot_path)
             except subprocess.CalledProcessError as e:
                 log(ERROR, str(e))
                 return False
@@ -188,19 +192,22 @@ class Snapshotter:
         self._snapshot_base_path = path
 
     def take_snapshot(self):
-        mkdir_recursive(self._snapshot_base_path)
+        if not SIMULATE:
+            mkdir_recursive(self._snapshot_base_path)
 
         for task in self._tasks:
             log(INFO, 'Taking snapshot of task: {}'.format(task.get_name()))
             task_snapshot_base_path = os.path.join(self._snapshot_base_path, task.get_name())
-            mkdir_recursive(task_snapshot_base_path)
+            if not SIMULATE:
+                mkdir_recursive(task_snapshot_base_path)
 
             existing_snapshots = task.find_existing_snapshots(task_snapshot_base_path)
             existing_snapshots.sort(key=lambda snapshot: snapshot['age'])
 
             timestamp = datetime.datetime.now().strftime(SNAPSHOT_FORMAT)
             task_snapshot_path = os.path.join(task_snapshot_base_path, timestamp)
-            mkdir_recursive(task_snapshot_path)
+            if not SIMULATE:
+                mkdir_recursive(task_snapshot_path)
             log(DEBUG, "Timestamp is {}".format(str(timestamp)))
 
             environment = {}
@@ -211,7 +218,8 @@ class Snapshotter:
             #    environment['YOUNGEST_SNAPSHOT'] = None
             if not task.take_snapshot(task_snapshot_path, environment):
                 log(INFO, 'Cleaning up after erroneous snapshot: {}'.format(task_snapshot_path))
-                shutil.rmtree(task_snapshot_path)
+                if not SIMULATE:
+                    shutil.rmtree(task_snapshot_path)
 
     def perform_cleanup(self):
         for task in self._tasks:
@@ -221,12 +229,13 @@ class Snapshotter:
             expired = task.find_expired_snapshots(snapshots)
             for snapshot in expired:
                 log(INFO, 'Removing expired snapshot {}'.format(snapshot["name"]))
-                for root, dirs, files in os.walk(snapshot['path'], topdown=True):
-                    for name in itertools.chain(dirs, files):
-                        pathname = os.path.join(root, name)
-                        st = os.stat(pathname)
-                        os.chmod(pathname, st.st_mode | stat.S_IWRITE)
-                shutil.rmtree(snapshot['path'])
+                if not SIMULATE:
+                    for root, dirs, files in os.walk(snapshot['path'], topdown=True):
+                        for name in itertools.chain(dirs, files):
+                            pathname = os.path.join(root, name)
+                            st = os.stat(pathname)
+                            os.chmod(pathname, st.st_mode | stat.S_IWRITE)
+                    shutil.rmtree(snapshot['path'])
 
     def __str__(self):
         ret = StringIO.StringIO()
@@ -242,12 +251,16 @@ def main(arguments):
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('-c', '--config', help="Configuration file", default='~/.snapshotter')
     parser.add_argument('--cron', help="Show suitable crontab job definition", action='store_true')
+    parser.add_argument('-s', '--simulate', help="Don't take/remove any snapshots. Only check cleanup rules.", action='store_true')
     parser.add_argument('--verbose', dest='verbosity', choices=["DEBUG", "INFO", "WARNING", "ERROR"], default="WARNING")
 
     args = parser.parse_args(arguments)
 
     global VERBOSITY
     VERBOSITY = eval(args.verbosity)
+
+    global SIMULATE
+    SIMULATE = args.simulate
 
     config = ConfigParser.ConfigParser()
 
